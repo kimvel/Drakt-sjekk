@@ -1,6 +1,6 @@
 """
-Norge drakt-sjekk — ingen AI, ingen kostnad.
-Sjekker butikker direkte og sender Discord-varsel ved funn.
+Norge drakt-sjekk med Playwright.
+Kjører ekte Chromium, leser faktisk lagerdata, sender Discord-varsel ved funn.
 """
 
 import os
@@ -8,72 +8,89 @@ import json
 import hashlib
 import requests
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-# --- Konfig ---
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-SEEN_FILE = "seen.json"  # Husker hva som er varslet (lagres i GitHub Actions cache)
+SEEN_FILE = "seen.json"
+SIZES = ["L", "XL"]
 
-SIZES = ["L", "XL"]  # Størrelser å se etter
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-    "Accept-Language": "no,en;q=0.9",
-}
-
-# --- Butikker med direkte URL + lagersignal ---
-# "sold_out_signal": tekst som indikerer utsolgt
-# "in_stock_signal": tekst som indikerer på lager (valgfritt)
 STORES = [
     {
         "name": "Unisport",
         "url": "https://www.unisportstore.no/football-shirts/norway-home-shirt-world-cup-2026/461740/",
-        "sold_out_signals": ["remind me", "varsle meg", "ikke på lager"],
-        "size_signals": ["størrelse l", "størrelse xl", ">l<", ">xl<", '"L"', '"XL"'],
-        "shop_url": "https://www.unisportstore.no/football-shirts/norway-home-shirt-world-cup-2026/461740/",
+        "sold_out": ["varsle meg", "remind me", "not available"],
     },
     {
         "name": "Intersport",
         "url": "https://www.intersport.no/nike-norge-mens-stadium-home-jersey-2026-universityreddkhtm-unisex-ib5316",
-        "sold_out_signals": ["ikke tilgjengelig", "utsolgt", "sold out"],
-        "size_signals": [">l<", ">xl<", '"L"', '"XL"', "size-l", "size-xl"],
-        "shop_url": "https://www.intersport.no/nike-norge-mens-stadium-home-jersey-2026-universityreddkhtm-unisex-ib5316",
+        "sold_out": ["utsolgt", "sold out", "ikke tilgjengelig"],
     },
     {
         "name": "XXL",
-        "url": "https://www.xxl.no/catalogsearch/result/?q=norge+hjemmedrakt+2026",
-        "sold_out_signals": ["ingen resultater", "0 produkter"],
-        "size_signals": ["norge", "hjemmedrakt", "2026"],
-        "shop_url": "https://www.xxl.no/catalogsearch/result/?q=norge+hjemmedrakt+2026",
+        "url": "https://www.xxl.no/search?query=norge+hjemmedrakt+2026",
+        "sold_out": ["ingen resultater", "0 produkter"],
     },
     {
         "name": "Nike",
-        "url": "https://www.nike.com/no/w?q=norge+drakt+2026&vst=norge+drakt+2026",
-        "sold_out_signals": ["ingen resultater"],
-        "size_signals": ["norway", "norge", "home jersey 2026"],
-        "shop_url": "https://www.nike.com/no/w?q=norge+drakt+2026&vst=norge+drakt+2026",
+        "url": "https://www.nike.com/no/w?q=norge+hjemmedrakt+2026&vst=norge+hjemmedrakt+2026",
+        "sold_out": ["ingen resultater"],
     },
     {
         "name": "Sport 1",
         "url": "https://www.sport1.no/search?q=norge+drakt+2026",
-        "sold_out_signals": ["ingen treff", "0 treff"],
-        "size_signals": ["norge", "drakt", "2026"],
-        "shop_url": "https://www.sport1.no/search?q=norge+drakt+2026",
+        "sold_out": ["ingen treff", "0 treff"],
     },
     {
         "name": "Anton Sport",
         "url": "https://www.antonsport.no/search?q=norge+drakt+2026",
-        "sold_out_signals": ["ingen treff", "0 resultater"],
-        "size_signals": ["norge", "drakt", "2026"],
-        "shop_url": "https://www.antonsport.no/search?q=norge+drakt+2026",
+        "sold_out": ["ingen treff", "0 resultater"],
     },
     {
         "name": "Torshov Sport",
-        "url": "https://www.torshovsport.no/search?q=norge+drakt",
-        "sold_out_signals": ["ingen treff", "0 resultater"],
-        "size_signals": ["norge", "drakt"],
-        "shop_url": "https://www.torshovsport.no/search?q=norge+drakt",
+        "url": "https://www.torshovsport.no/search?q=norge+drakt+2026",
+        "sold_out": ["ingen treff", "0 resultater"],
     },
 ]
+
+
+def find_sizes_in_text(text):
+    found = []
+    text_lower = text.lower()
+    for size in SIZES:
+        s = size.lower()
+        patterns = [
+            f'"{s}"', f"'{s}'", f">{s}<", f"size-{s}",
+            f"value=\"{s}\"", f"data-size=\"{s}\"", f" {s} ", f"/{s}/",
+        ]
+        if any(p in text_lower for p in patterns):
+            found.append(size)
+    return found
+
+
+def is_sold_out(text, sold_out_signals):
+    text_lower = text.lower()
+    return any(signal in text_lower for signal in sold_out_signals)
+
+
+def check_store(page, store):
+    try:
+        page.goto(store["url"], wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
+        text = page.content()
+        if is_sold_out(text, store["sold_out"]):
+            return [], "utsolgt", None
+        sizes = find_sizes_in_text(text)
+        return sizes, "sjekket", None
+    except Exception as e:
+        return [], "feil", str(e)
+
+
+def send_discord(message):
+    requests.post(
+        DISCORD_WEBHOOK,
+        json={"content": message, "username": "🇳🇴 Drakt-bot"},
+        timeout=10,
+    )
 
 
 def load_seen():
@@ -88,95 +105,79 @@ def save_seen(seen):
         json.dump(seen, f)
 
 
-def check_store(store):
-    """
-    Returnerer (found: bool, sizes_found: list, error: str|None)
-    """
-    try:
-        r = requests.get(store["url"], headers=HEADERS, timeout=15)
-        html = r.text.lower()
-
-        # Sjekk utsolgt-signal først
-        for signal in store["sold_out_signals"]:
-            if signal.lower() in html:
-                return False, [], None
-
-        # Sjekk om noen av størrelsene finnes
-        sizes_found = []
-        for size in SIZES:
-            # Søk etter størrelse i HTML
-            size_lower = size.lower()
-            if (
-                f">{size_lower}<" in html
-                or f'value="{size_lower}"' in html
-                or f'data-size="{size_lower}"' in html
-                or f'"size":"{size_lower}"' in html
-                or f"size-{size_lower}" in html
-            ):
-                sizes_found.append(size)
-
-        # Sjekk generelle size_signals (for søkeresultat-sider)
-        general_match = any(s.lower() in html for s in store["size_signals"])
-
-        if sizes_found:
-            return True, sizes_found, None
-        elif general_match and not any(s.lower() in html for s in store["sold_out_signals"]):
-            # Søkeside treffer — mulig funn, rapporter uten størrelsesbekreftelse
-            return True, ["ukjent størrelse"], None
-
-        return False, [], None
-
-    except Exception as e:
-        return False, [], str(e)
-
-
-def send_discord(message):
-    payload = {"content": message, "username": "🇳🇴 Drakt-bot"}
-    requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
-
-
 def make_key(store_name, sizes):
-    key_str = f"{store_name}-{'-'.join(sorted(sizes))}"
-    return hashlib.md5(key_str.encode()).hexdigest()
+    return hashlib.md5(f"{store_name}-{'-'.join(sorted(sizes))}".encode()).hexdigest()
 
 
 def main():
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
-    if not webhook:
-        print("FEIL: DISCORD_WEBHOOK_URL ikke satt som secret!")
+    if not DISCORD_WEBHOOK:
+        print("FEIL: DISCORD_WEBHOOK_URL mangler")
         raise SystemExit(1)
 
-    seen = load_seen()
-    found_any = False
+    mode = os.environ.get("RUN_MODE", "check")  # "check" eller "status"
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    print(f"[{now}] Modus: {mode} — sjekker {len(STORES)} butikker...")
 
-    print(f"[{now}] Starter sjekk av {len(STORES)} butikker...")
+    seen = load_seen()
+    results = []
 
-    for store in STORES:
-        found, sizes, error = check_store(store)
-        print(f"  {store['name']}: found={found}, sizes={sizes}, error={error}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            locale="nb-NO",
+        )
+        page = context.new_page()
 
-        if found and sizes:
-            key = make_key(store["name"], sizes)
+        for store in STORES:
+            sizes, status, error = check_store(page, store)
+            results.append({"store": store, "sizes": sizes, "status": status, "error": error})
+            print(f"  {store['name']}: status={status}, sizes={sizes}" + (f", feil={error}" if error else ""))
+
+        browser.close()
+
+    # --- Send varsler ved funn ---
+    found_any = False
+    for r in results:
+        if r["sizes"]:
+            key = make_key(r["store"]["name"], r["sizes"])
             if key not in seen:
-                # Nytt funn — send varsel
-                size_str = ", ".join(sizes)
-                msg = (
-                    f"🇳🇴 **Drakt funnet!**\n"
-                    f"**Butikk:** {store['name']}\n"
+                size_str = ", ".join(r["sizes"])
+                send_discord(
+                    f"🚨 **DRAKT PÅ LAGER!**\n"
+                    f"**Butikk:** {r['store']['name']}\n"
                     f"**Størrelse:** {size_str}\n"
-                    f"**Link:** {store['shop_url']}\n"
+                    f"**Link:** {r['store']['url']}\n"
                     f"*{now}*"
                 )
-                send_discord(msg)
                 seen[key] = now
                 found_any = True
-                print(f"  → Discord-varsel sendt for {store['name']} ({size_str})")
+                print(f"  → Varsel sendt: {r['store']['name']} ({size_str})")
             else:
-                print(f"  → Allerede varslet, hopper over")
+                print(f"  → Allerede varslet")
 
-    if not found_any:
-        print("Ingen nye funn.")
+    # --- Status-melding (alltid ved manuell kjøring, aldri ved automatisk) ---
+    if mode == "status" or (mode == "check" and not found_any):
+        lines = [f"📋 **Drakt-status** — {now}", f"Søker: Norge hjemmedrakt VM 2026 herre, str. {', '.join(SIZES)}", ""]
+        for r in results:
+            name = r["store"]["name"]
+            if r["error"]:
+                lines.append(f"⚠️ {name} — feil ved sjekk")
+            elif r["sizes"]:
+                lines.append(f"✅ **{name} — PÅ LAGER: {', '.join(r['sizes'])}**")
+            elif r["status"] == "utsolgt":
+                lines.append(f"❌ {name} — utsolgt")
+            else:
+                lines.append(f"❌ {name} — ikke funnet")
+
+        # Bare send til Discord hvis manuell kjøring (status-modus)
+        if mode == "status":
+            send_discord("\n".join(lines))
+
+        print("\n".join(lines))
+
+    if not found_any and mode == "check":
+        print("Ingen nye funn i riktig størrelse.")
 
     save_seen(seen)
 
