@@ -32,13 +32,13 @@ STORES = [
     },
     {
         "name": "Nike",
-        "url": "https://www.nike.com/no/w?q=norge+hjemmedrakt+2026&vst=norge+hjemmedrakt+2026",
-        "sold_out": ["ingen resultater"],
+        "url": "https://www.nike.com/no/t/norway-national-team-2026-stadium-dri-fit-fotballdrakt-xaR6u79T/IB5316-673",
+        "sold_out": ["utsolgt", "sold out", "ikke tilgjengelig"],
     },
     {
         "name": "Sport 1",
-        "url": "https://www.sport1.no/search?q=norge+drakt+2026",
-        "sold_out": ["ingen treff", "0 treff"],
+        "url": "https://www.sport1.no/nike-norge-mens-stadium-home-jersey-2026-chile-redchile-redwhite-unisex-ib5316",
+        "sold_out": ["utsolgt", "sold out", "ikke tilgjengelig"],
     },
     {
         "name": "Anton Sport",
@@ -47,20 +47,33 @@ STORES = [
     },
     {
         "name": "Torshov Sport",
-        "url": "https://www.torshovsport.no/search?q=norge+drakt+2026",
-        "sold_out": ["ingen treff", "0 resultater"],
+        "url": "https://www.torshovsport.no/fotball/kampanjer/vm-2026-fotballdrakter/nike-norge-herrelandslaget-vm-2026-fotballdrakt-hjemme",
+        "sold_out": ["utsolgt", "sold out", "ikke tilgjengelig"],
     },
 ]
 
 
 def find_sizes_in_text(text):
+    """Kun treff på størrelse som faktisk er en kjøpbar variant."""
     found = []
     text_lower = text.lower()
     for size in SIZES:
         s = size.lower()
         patterns = [
-            f'"{s}"', f"'{s}'", f">{s}<", f"size-{s}",
-            f"value=\"{s}\"", f"data-size=\"{s}\"", f" {s} ", f"/{s}/",
+            f'size-{s}"',
+            f'size-{s} ',
+            f'data-size="{s}"',
+            f'data-value="{s}"',
+            f'value="{s}"',
+            f'"size":"{s}"',
+            f'"size": "{s}"',
+            f'["{s}"]',
+            f'aria-label="{s}"',
+            f'>{s}</button>',
+            f'>{s}</option>',
+            f'>{s}</span>',
+            f'>{s}</a>',
+            f'>{s}</li>',
         ]
         if any(p in text_lower for p in patterns):
             found.append(size)
