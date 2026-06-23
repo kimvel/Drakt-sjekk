@@ -10,7 +10,7 @@ import requests
 from datetime import datetime
 
 # --- Konfig ---
-DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"]
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SEEN_FILE = "seen.json"  # Husker hva som er varslet (lagres i GitHub Actions cache)
 
 SIZES = ["L", "XL"]  # Størrelser å se etter
@@ -141,6 +141,11 @@ def make_key(store_name, sizes):
 
 
 def main():
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    if not webhook:
+        print("FEIL: DISCORD_WEBHOOK_URL ikke satt som secret!")
+        raise SystemExit(1)
+
     seen = load_seen()
     found_any = False
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
