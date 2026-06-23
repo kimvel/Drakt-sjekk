@@ -169,28 +169,39 @@ def main():
             else:
                 print(f"  → Allerede varslet")
 
-    # --- Status-melding (alltid ved manuell kjøring, aldri ved automatisk) ---
-    if mode == "status" or (mode == "check" and not found_any):
-        lines = [f"📋 **Drakt-status** — {now}", f"Søker: Norge hjemmedrakt VM 2026 herre, str. {', '.join(SIZES)}", ""]
-        for r in results:
-            name = r["store"]["name"]
-            if r["error"]:
-                lines.append(f"⚠️ {name} — feil ved sjekk")
-            elif r["sizes"]:
-                lines.append(f"✅ **{name} — PÅ LAGER: {', '.join(r['sizes'])}**")
-            elif r["status"] == "utsolgt":
-                lines.append(f"❌ {name} — utsolgt")
-            else:
-                lines.append(f"❌ {name} — ikke funnet")
+    # --- Oppsummering til Discord etter hver sjekk ---
+    store_names = ", ".join(r["store"]["name"] for r in results)
+    found_lines = []
+    not_found_lines = []
+    error_lines = []
 
-        # Bare send til Discord hvis manuell kjøring (status-modus)
-        if mode == "status":
-            send_discord("\n".join(lines))
+    for r in results:
+        name = r["store"]["name"]
+        if r["error"]:
+            error_lines.append(f"⚠️ {name}")
+        elif r["sizes"]:
+            found_lines.append(f"✅ **{name}** — str. {', '.join(r['sizes'])}")
+        elif r["status"] == "utsolgt":
+            not_found_lines.append(f"❌ {name} — utsolgt")
+        else:
+            not_found_lines.append(f"❌ {name} — ikke funnet")
 
-        print("\n".join(lines))
+    if not found_any:
+        lines = [
+            f"🔍 **Sjekk fullført** — {now}",
+            f"Størrelser: {', '.join(SIZES)}",
+            "",
+            "**Sjekket:**",
+        ]
+        lines += not_found_lines
+        if error_lines:
+            lines += error_lines
+        lines += ["", f"Ingen drakter funnet — sjekker igjen om 30 min."]
+        send_discord("\n".join(lines))
 
-    if not found_any and mode == "check":
-        print("Ingen nye funn i riktig størrelse.")
+    if error_lines:
+        print(f"Feil på: {', '.join(e.lstrip('⚠️ ') for e in error_lines)}")
+    print(f"Ingen nye funn i riktig størrelse.")
 
     save_seen(seen)
 
